@@ -1,0 +1,10 @@
+# MATLAB & Simulink temporary / generated files
+*.asv
+*.m~
+*.mex*
+*.p
+slprj/
+*.slxc
+codegen/
+*.log
+.DS_Store
