@@ -1,250 +1,405 @@
 %% StandaloneSimulation.m
 %  ========================================================================
-%  UNDERWATER DRONE HIDE & SEEK — STANDALONE SINGLE-FILE SIMULATION
+%  UNDERWATER DRONE HIDE & SEEK — STANDALONE SIMULATION
 %  ========================================================================
-%  Copy and paste this ENTIRE code into a single file named:
-%      StandaloneSimulation.m
-%  in MATLAB / MATLAB Online, then click RUN!
+%  Paste this into MATLAB Online and click RUN!
 %
-%  Features:
-%    - Self-contained 3D Bathymetry & Underwater Terrain (no external map files needed)
-%    - Seeker AUV: Search -> Track -> Pursue AI with Particle Filter sonar tracking
-%    - Hider AUV: Hide -> Silent -> Evade AI with stealth thermocline depth usage
-%    - Real-time 4-panel dark-mode animated 3D visualizer HUD
+%  Controls:
+%    - Move your mouse over the 3D arena to steer the HIDER (green circle)
+%    - The SEEKER (red square) autonomously hunts using conical sonar
+%    - Hide behind boulders to break line-of-sight!
 %  ========================================================================
 
 function StandaloneSimulation()
     clc; close all;
-    fprintf('================================═════════════════════\n');
-    fprintf('   UNDERWATER DRONE HIDE & SEEK (Standalone Mode)   \n');
-    fprintf('================================═════════════════════\n\n');
 
-    %% 1. Simulation Parameters
-    maxTime       = 300;     % Max game time (sec)
-    dt            = 0.5;     % Time step (sec)
-    captureRadius = 8.0;     % Capture distance (m)
-    sonarRange    = 70.0;    % Seeker sonar range (m)
+    %% =====================================================================
+    %   1. FIGURE & AXES SETUP
+    % ======================================================================
+    hFig = figure('Name', 'Underwater Drone Hide & Seek — Interactive', ...
+                  'Color', [0.88, 0.94, 0.98], ...
+                  'Position', [40, 40, 1200, 820], ...
+                  'Renderer', 'opengl');
 
-    %% 2. Environment Setup (Synthetic 3D Ocean Bathymetry)
-    gridSize = [200, 200, 100]; % [X, Y, Z] in meters (Z from -100 to 0)
-    [Xg, Yg] = meshgrid(1:2:200, 1:2:200);
-    Z_seabed = -100 + 25*sin(Xg/30).*cos(Yg/30) + 15*cos(Xg/50); % 3D underwater peaks
+    hAx = axes('Parent', hFig, 'Position', [0.05 0.22 0.58 0.72]);
+    hold(hAx, 'on'); grid(hAx, 'on');
 
-    %% 3. Initial States: [x, y, z, heading]
-    seekerPose = [10,  10,  -20, 0];
-    hiderPose  = [180, 180, -65, pi];
+    X_MAX = 250; Y_MAX = 250; Z_MAX = 60;
+    xlim(hAx, [0 X_MAX]); ylim(hAx, [0 Y_MAX]); zlim(hAx, [0 Z_MAX]);
 
-    seekerVel = 3.5; % m/s
-    hiderVel  = 2.8; % m/s
+    xlabel(hAx, 'East / X (m)',  'FontWeight','bold','Color',[0.1 0.2 0.3]);
+    ylabel(hAx, 'North / Y (m)', 'FontWeight','bold','Color',[0.1 0.2 0.3]);
+    zlabel(hAx, 'Depth / Z (m)', 'FontWeight','bold','Color',[0.1 0.2 0.3]);
+    title(hAx, 'Ocean Arena (250m × 250m)  |  Steer Hider with Mouse', ...
+          'FontSize',12,'FontWeight','bold','Color',[0.05 0.15 0.25]);
 
-    % Seeker AI State: 1 = Search, 2 = Track, 3 = Pursue
-    seekerState = 1;
-    stateNames  = {'SEARCH', 'TRACK', 'PURSUE'};
+    set(hAx, 'ZDir','reverse', ...
+             'Color',[0.82 0.92 0.96], ...
+             'GridColor',[0.55 0.70 0.80], ...
+             'GridAlpha',0.35, 'Box','on');
 
-    % Hider AI State: 1 = Hide, 2 = Silent, 3 = Evade
-    hiderState  = 1;
-    hiderNames  = {'HIDE', 'SILENT', 'EVADE'};
+    %% =====================================================================
+    %   2. BATHYMETRIC SEABED
+    % ======================================================================
+    [Xbed, Ybed] = meshgrid(0:5:X_MAX, 0:5:Y_MAX);
+    Zbed = 56.0 + 2.5*sin(Xbed/22).*cos(Ybed/26) + 1.2*sin((Xbed+Ybed)/18);
+    surf(hAx, Xbed, Ybed, Zbed, 'FaceColor',[0.74 0.69 0.58], ...
+         'EdgeColor','none','FaceAlpha',0.95);
 
-    %% 4. Particle Filter Setup (50 particles)
+    %% =====================================================================
+    %   3. PROCEDURAL BOULDERS (14)
+    % ======================================================================
+    rockData = [
+         40,  45, 11.0;  75,  90, 13.5; 120,  50, 12.0;  60, 160, 10.5;
+        135, 140, 15.0; 180,  70, 13.0; 210, 130, 11.5; 160, 200, 14.0;
+         95, 215, 12.0;  35, 210, 10.0; 215,  40, 10.5; 185, 175, 12.5;
+         90, 125,  9.5; 145,  95, 11.0
+    ];
+    numRocks = size(rockData,1);
+    rockModels = cell(numRocks,1);
+    rng(101);
+
+    for i = 1:numRocks
+        cx = rockData(i,1); cy = rockData(i,2); baseR = rockData(i,3);
+        cz = 56.0 + 2.5*sin(cx/22)*cos(cy/26) - baseR*0.52;
+        [sx,sy,sz] = sphere(22);
+        noise = 1.0 + 0.22*sin(3*sx).*cos(3*sy) + 0.12*cos(5*sz) + 0.08*(rand(size(sx))-0.5);
+        rx = cx + baseR*sx.*noise*1.15;
+        ry = cy + baseR*sy.*noise*0.95;
+        rz = cz + baseR*sz.*noise*0.85;
+        rockModels{i}.center = [cx, cy, cz];
+        rockModels{i}.radius = baseR * 1.08;
+        surf(hAx, rx, ry, rz, 'FaceColor',[0.40 0.38 0.36], ...
+             'EdgeColor','none','FaceAlpha',1.0);
+    end
+
+    %% =====================================================================
+    %   4. KELP VEGETATION (14 CLUSTERS)
+    % ======================================================================
+    plantClusters = [
+        25,30; 50,110; 80,70; 110,170; 150,45; 170,120;
+        200,85; 225,180; 130,220; 70,225; 30,160; 190,220; 115,90; 165,160
+    ];
+    for p = 1:size(plantClusters,1)
+        px = plantClusters(p,1); py = plantClusters(p,2);
+        pz_bed = 56.0 + 2.5*sin(px/22)*cos(py/26);
+        for stalk = 1:3
+            stalkH = 12 + rand()*5;
+            zNodes = linspace(pz_bed, pz_bed-stalkH, 16);
+            xSway  = px + (rand()-0.5)*2.0 + 1.1*sin((pz_bed-zNodes)/2.5);
+            ySway  = py + (rand()-0.5)*2.0 + 0.9*cos((pz_bed-zNodes)/2.8);
+            plot3(hAx, xSway, ySway, zNodes, 'Color',[0.18 0.44 0.22],'LineWidth',2.0);
+        end
+    end
+
+    %% =====================================================================
+    %   5. SIDE PANELS (Distance Plot & HUD)
+    % ======================================================================
+    % Distance plot panel
+    axDist = axes('Parent', hFig, 'Position', [0.67 0.55 0.30 0.38]);
+    set(axDist, 'Color',[0.92 0.96 1.0], 'XColor',[0.1 0.2 0.3], 'YColor',[0.1 0.2 0.3]);
+    hold(axDist,'on'); grid(axDist,'on');
+    title(axDist,'Inter-AUV Range (m)','FontWeight','bold','Color',[0.05 0.15 0.25]);
+    xlabel(axDist,'Step'); ylabel(axDist,'Distance (m)');
+    hDistLine = plot(axDist, 0, norm([200-35, 200-35, 42-28]), 'Color',[0.1 0.5 0.9],'LineWidth',2);
+    hCaptLine = yline(axDist, 8.0, 'r--', 'Capture','LineWidth',1.5,'Color',[0.8 0.1 0.1]);
+
+    % HUD stats panel (text area)
+    axHUD = axes('Parent', hFig, 'Position', [0.67 0.08 0.30 0.42]);
+    axis(axHUD,'off');
+    set(axHUD,'Color',[0.88 0.94 0.98]);
+    hHUDText = text(axHUD, 0.05, 0.95, 'INITIALIZING...', ...
+        'Units','normalized','VerticalAlignment','top', ...
+        'FontSize',10,'FontName','Courier','Color',[0.05 0.15 0.25], ...
+        'BackgroundColor',[0.93 0.97 1.0],'Margin',8, ...
+        'Interpreter','none');
+
+    % Legend panel at bottom
+    axLeg = axes('Parent', hFig, 'Position', [0.05 0.04 0.58 0.12]);
+    axis(axLeg,'off'); set(axLeg,'Color',[0.88 0.94 0.98]);
+    text(axLeg,0.02,0.65,'● HIDER (You — steer with mouse)', 'Units','normalized','Color',[0.05 0.5 0.15],'FontSize',10,'FontWeight','bold');
+    text(axLeg,0.02,0.25,'■ SEEKER (Autonomous AI + Sonar)', 'Units','normalized','Color',[0.75 0.1 0.1], 'FontSize',10,'FontWeight','bold');
+    text(axLeg,0.55,0.65,'◀ Blue cone = active sonar beam','Units','normalized','Color',[0.05 0.4 0.75],'FontSize',10);
+    text(axLeg,0.55,0.25,'★ Hide behind boulders for acoustic shadow!','Units','normalized','Color',[0.4 0.3 0.05],'FontSize',10);
+
+    %% =====================================================================
+    %   6. AGENT INITIAL POSITIONS & GRAPHICS HANDLES
+    % ======================================================================
+    global mouseTargetPos isSimRunning arenaBounds;
+    arenaBounds     = [X_MAX, Y_MAX, Z_MAX];
+    mouseTargetPos  = [200.0, 200.0, 42.0];
+    isSimRunning    = true;
+
+    hiderPos  = [200.0, 200.0, 42.0];
+    seekerPos = [35.0,  35.0,  28.0];
+    seekerVel = [0.0, 0.0, 0.0];
+
+    % Agent markers
+    hHider = plot3(hAx, hiderPos(1), hiderPos(2), hiderPos(3), 'o', ...
+                   'MarkerSize',11, 'MarkerFaceColor',[0.15 0.7 0.3], ...
+                   'MarkerEdgeColor',[0.05 0.35 0.15], 'LineWidth',1.5);
+    hSeeker = plot3(hAx, seekerPos(1), seekerPos(2), seekerPos(3), 's', ...
+                    'MarkerSize',12, 'MarkerFaceColor',[0.85 0.25 0.2], ...
+                    'MarkerEdgeColor',[0.45 0.05 0.05], 'LineWidth',1.5);
+    hPointerTarget = plot3(hAx, mouseTargetPos(1), mouseTargetPos(2), mouseTargetPos(3), ...
+                           'x','MarkerSize',13,'LineWidth',2,'Color',[0.1 0.6 0.2]);
+
+    % Trails
+    hHiderTrail  = plot3(hAx, hiderPos(1), hiderPos(2), hiderPos(3), ...
+                         '-', 'Color',[0.1 0.55 0.25],'LineWidth',1.4);
+    hSeekerTrail = plot3(hAx, seekerPos(1), seekerPos(2), seekerPos(3), ...
+                         '--','Color',[0.75 0.2 0.15],'LineWidth',1.2);
+
+    % In-scene HUD label
+    hInSceneHUD = text(hAx, 8, 12, 6, 'INITIALIZING...', ...
+                       'FontSize',10,'FontWeight','bold','Color',[0.1 0.25 0.35], ...
+                       'BackgroundColor',[0.95 0.98 1.0],'Margin',5);
+
+    view(hAx, 38, 30); camlight('headlight'); lighting(hAx,'gouraud');
+
+    % Mouse & close callbacks
+    set(hFig,'WindowButtonMotionFcn', @(src,evt) onMouseMove(hAx));
+    set(hFig,'CloseRequestFcn',       @(src,evt) onCloseFigure(src));
+
+    %% =====================================================================
+    %   7. PARTICLE FILTER STATE (50 particles for seeker estimate)
+    % ======================================================================
     numParticles = 50;
-    particles    = repmat(seekerPose(1:3), numParticles, 1) + randn(numParticles, 3)*15;
-    weights      = ones(numParticles, 1) / numParticles;
+    particles    = repmat(hiderPos, numParticles, 1) + randn(numParticles,3)*20;
+    weights      = ones(numParticles,1) / numParticles;
 
-    %% 5. Setup Visualization Dashboard
-    fig = figure('Name', 'Underwater Drone Hide & Seek', 'Color', [0.08 0.1 0.15], ...
-                 'Position', [100, 100, 1200, 800]);
+    %% =====================================================================
+    %   8. MAIN SIMULATION LOOP
+    % ======================================================================
+    sonarMaxRange      = 65.0;
+    azimuthAperture    = deg2rad(38);
+    elevationAperture  = deg2rad(24);
+    sonarAzimuth       = deg2rad(0);
+    sonarPitch         = deg2rad(6);
+    captureRadius      = 8.0;
+    stateNames         = {'SEARCH','TRACK','PURSUE'};
+    hiderNames         = {'HIDE','SILENT','EVADE'};
+    seekerState        = 1; hiderState = 1;
 
-    % Main 3D Panel
-    ax3D = subplot(2, 2, [1 3], 'Parent', fig);
-    surf(ax3D, Xg, Yg, Z_seabed, 'EdgeColor', 'none', 'FaceAlpha', 0.6);
-    hold(ax3D, 'on'); colormap(ax3D, 'winter');
-    grid(ax3D, 'on'); set(ax3D, 'Color', [0.05 0.07 0.12], 'XColor', 'w', 'YColor', 'w', 'ZColor', 'w');
-    xlabel(ax3D, 'X (m)'); ylabel(ax3D, 'Y (m)'); zlabel(ax3D, 'Z (Depth m)');
-    title(ax3D, '3D Ocean Arena — Autonomous AUV Battle', 'Color', 'w', 'FontSize', 14);
-    axis(ax3D, [0 200 0 200 -100 0]);
-    view(ax3D, [-37.5, 30]);
+    hiderTrailX  = hiderPos(1);  hiderTrailY  = hiderPos(2);  hiderTrailZ  = hiderPos(3);
+    seekerTrailX = seekerPos(1); seekerTrailY = seekerPos(2); seekerTrailZ = seekerPos(3);
 
-    % Graphics handles
-    hSeeker  = plot3(ax3D, seekerPose(1), seekerPose(2), seekerPose(3), 'bo', 'MarkerSize', 10, 'LineWidth', 2, 'MarkerFaceColor', 'b');
-    hHider   = plot3(ax3D, hiderPose(1), hiderPose(2), hiderPose(3), 'rs', 'MarkerSize', 10, 'LineWidth', 2, 'MarkerFaceColor', 'r');
-    hSeekerT = plot3(ax3D, seekerPose(1), seekerPose(2), seekerPose(3), 'b-', 'LineWidth', 1.5);
-    hHiderT  = plot3(ax3D, hiderPose(1), hiderPose(2), hiderPose(3), 'r--', 'LineWidth', 1.5);
-    hParts   = plot3(ax3D, particles(:,1), particles(:,2), particles(:,3), 'c.', 'MarkerSize', 6);
+    distHist = norm(hiderPos - seekerPos);
+    stepHist = 0;
 
-    seekerHist = seekerPose(1:3);
-    hiderHist  = hiderPose(1:3);
+    hSonarMesh  = [];
+    isLockedOn  = false;
+    step        = 0;
+    captured    = false;
 
-    % Distance Plot Panel
-    axDist = subplot(2, 2, 2, 'Parent', fig);
-    set(axDist, 'Color', [0.05 0.07 0.12], 'XColor', 'w', 'YColor', 'w');
-    hold(axDist, 'on'); grid(axDist, 'on');
-    title(axDist, 'Inter-Drone Distance (m)', 'Color', 'w');
-    hDistLine = plot(axDist, 0, norm(seekerPose(1:3)-hiderPose(1:3)), 'g-', 'LineWidth', 2);
-    yline(axDist, captureRadius, 'r--', 'Capture Threshold', 'Color', 'r');
-    xlabel(axDist, 'Time (s)'); ylabel(axDist, 'Distance (m)');
+    while isSimRunning && ishandle(hFig)
+        step = step + 1;
 
-    % HUD Text Panel
-    axHUD = subplot(2, 2, 4, 'Parent', fig);
-    axis(axHUD, 'off');
-    set(axHUD, 'Color', [0.05 0.07 0.12]);
-    hHudText = text(axHUD, 0.05, 0.5, '', 'Color', 'w', 'FontSize', 12, 'FontName', 'Courier', 'Interpreter', 'none');
-
-    timeHist = 0;
-    distHist = norm(seekerPose(1:3)-hiderPose(1:3));
-
-    %% 6. Main Simulation Loop
-    t = 0;
-    captured = false;
-
-    % Random search waypoints for Seeker
-    waypoints = [30 30 -30; 150 40 -40; 160 160 -50; 40 160 -30];
-    wpIdx = 1;
-
-    while t < maxTime && ishandle(fig)
-        t = t + dt;
-
-        % Real distance between drones
-        trueDist = norm(seekerPose(1:3) - hiderPose(1:3));
-
-        % Check sonar detection (acoustic ray propagation)
-        detected = (trueDist <= sonarRange);
-        if hiderState == 2 % Silent mode reduces detection range
-            detected = (trueDist <= sonarRange * 0.4);
+        %% A. HIDER KINEMATICS (mouse-driven)
+        diffPointer   = mouseTargetPos - hiderPos;
+        distToPointer = norm(diffPointer);
+        if distToPointer > 0.5
+            hiderSpeed = min(2.40, distToPointer * 0.45);
+            hiderPos   = hiderPos + hiderSpeed*(diffPointer/distToPointer);
         end
-
-        %% ---- Seeker AI Finite State Machine ----
-        if detected
-            if trueDist < 25
-                seekerState = 3; % PURSUE
-            else
-                seekerState = 2; % TRACK
-            end
+        % Hider AI state based on proximity to seeker
+        distSH = norm(hiderPos - seekerPos);
+        if distSH < 20
+            hiderState = 3;
+        elseif distSH < 50
+            hiderState = 2;
         else
-            seekerState = 1;     % SEARCH
+            hiderState = 1;
         end
 
-        % Seeker Motion Logic
-        switch seekerState
-            case 1 % SEARCH: Follow waypoints
-                target = waypoints(wpIdx, :);
-                if norm(seekerPose(1:3) - target) < 10
-                    wpIdx = mod(wpIdx, size(waypoints,1)) + 1;
+        %% B. SONAR GEOMETRY
+        delete(hSonarMesh);
+        if ~isLockedOn
+            % Wide patrol arc around arena centre
+            patrolTarget = [125 + 85*cos(step*0.025), 125 + 85*sin(step*0.03), 30 + 6*sin(step*0.04)];
+            dirP  = patrolTarget - seekerPos;
+            seekerVel = 0.85*(dirP/norm(dirP));
+            seekerPos = seekerPos + seekerVel;
+            sonarAzimuth = mod(sonarAzimuth + deg2rad(9), 2*pi);
+            sonarPitch   = deg2rad(7)*sin(step*0.10) + deg2rad(5);
+            seekerState  = 1;
+        else
+            dirToHider   = hiderPos - seekerPos;
+            speedS       = min(1.4, distSH * 0.05 + 0.6);
+            seekerVel    = speedS*(dirToHider/norm(dirToHider));
+            seekerPos    = seekerPos + seekerVel;
+            sonarAzimuth = atan2(dirToHider(2), dirToHider(1));
+            sonarPitch   = atan2(dirToHider(3), norm(dirToHider(1:2)));
+            seekerState  = ternary(distSH < 25, 3, 2);
+        end
+
+        % Build conical sonar mesh
+        [Rgrid,PhiGrid] = meshgrid(linspace(0,sonarMaxRange,8), linspace(0,2*pi,20));
+        cLX = Rgrid;
+        cLY = Rgrid.*tan(azimuthAperture).*cos(PhiGrid);
+        cLZ = Rgrid.*tan(elevationAperture).*sin(PhiGrid);
+        Rz  = [cos(sonarAzimuth) -sin(sonarAzimuth) 0; sin(sonarAzimuth) cos(sonarAzimuth) 0; 0 0 1];
+        Ry  = [cos(sonarPitch) 0 sin(sonarPitch); 0 1 0; -sin(sonarPitch) 0 cos(sonarPitch)];
+        Rot = Rz*Ry;
+        cR  = Rot*[cLX(:)'; cLY(:)'; cLZ(:)'];
+        cX  = seekerPos(1) + reshape(cR(1,:), size(Rgrid));
+        cY  = seekerPos(2) + reshape(cR(2,:), size(Rgrid));
+        cZ  = seekerPos(3) + reshape(cR(3,:), size(Rgrid));
+        hSonarMesh = surf(hAx, cX, cY, cZ, ...
+                          'FaceColor',[0.1 0.65 0.95],'EdgeColor','none','FaceAlpha',0.16);
+
+        %% C. RAY-CAST OCCLUSION — ALL 14 BOULDERS
+        relVec       = hiderPos - seekerPos;
+        rangeToHider = norm(relVec);
+        beamDir      = Rot*[1;0;0];
+        cosA         = dot(relVec/rangeToHider, beamDir);
+        targetAngle  = acos(max(-1.0, min(1.0, cosA)));
+        isInsideBeam = (rangeToHider <= sonarMaxRange) && (targetAngle <= azimuthAperture);
+        isOccluded   = false;
+
+        if isInsideBeam
+            rayDir = relVec / rangeToHider;
+            for r = 1:numRocks
+                rC   = rockModels{r}.center;
+                rRad = rockModels{r}.radius;
+                proj = dot(rC - seekerPos, rayDir);
+                if proj > 0 && proj < rangeToHider
+                    perpDist = norm((seekerPos + proj*rayDir) - rC);
+                    if perpDist <= rRad
+                        isOccluded = true; break;
+                    end
                 end
-                dirVec = (target - seekerPose(1:3)) / norm(target - seekerPose(1:3));
-
-            case 2 % TRACK: Move toward estimated target from Particle Filter
-                estTarget = mean(particles, 1);
-                dirVec = (estTarget - seekerPose(1:3)) / norm(estTarget - seekerPose(1:3));
-
-            case 3 % PURSUE: Direct high-speed intercept
-                dirVec = (hiderPose(1:3) - seekerPose(1:3)) / trueDist;
+            end
         end
 
-        seekerPose(1:3) = seekerPose(1:3) + dirVec * seekerVel * dt;
-        seekerPose(3)   = max(-90, min(-10, seekerPose(3))); % Enforce ocean bounds
-
-        %% ---- Hider AI Finite State Machine ----
-        if trueDist < 20
-            hiderState = 3; % EVADE
-        elseif trueDist < 50
-            hiderState = 2; % SILENT
+        %% D. PARTICLE FILTER UPDATE
+        if isInsideBeam && ~isOccluded
+            meas = hiderPos + randn(1,3)*3.0;
         else
-            hiderState = 1; % HIDE
+            meas = seekerPos + randn(1,3)*30.0;
         end
+        particles  = particles + randn(numParticles,3)*1.5;
+        distsP     = vecnorm(particles - meas, 2, 2);
+        weights    = exp(-distsP.^2/(2*15^2));
+        weights    = weights / sum(weights);
+        idxR       = drawRandomIdx(weights, numParticles);
+        particles  = particles(idxR,:);
 
-        % Hider Motion Logic
-        switch hiderState
-            case 1 % HIDE: Move toward deep thermocline trench
-                hideTarget = [170, 170, -75];
-                dirH = (hideTarget - hiderPose(1:3)) / (norm(hideTarget - hiderPose(1:3)) + 1e-5);
-
-            case 2 % SILENT: Slow quiet movement
-                dirH = [-dirVec(1), -dirVec(2), -0.2];
-                dirH = dirH / norm(dirH);
-
-            case 3 % EVADE: High-speed evasive maneuver away from Seeker
-                dirH = (hiderPose(1:3) - seekerPose(1:3)) / trueDist;
-                dirH(3) = -0.5; % Dive deeper
-                dirH = dirH / norm(dirH);
-        end
-
-        currHVel = hiderVel * (1.2 * (hiderState==3) + 0.5 * (hiderState==2) + 1.0 * (hiderState==1));
-        hiderPose(1:3) = hiderPose(1:3) + dirH * currHVel * dt;
-        hiderPose(3)   = max(-95, min(-15, hiderPose(3)));
-
-        %% ---- Particle Filter Update ----
-        if detected
-            measurement = hiderPose(1:3) + randn(1,3)*3.0;
-        else
-            measurement = seekerPose(1:3) + randn(1,3)*25.0;
-        end
-
-        % Motion update
-        particles = particles + randn(numParticles, 3)*1.2;
-        % Weight update
-        distsP = vecnorm(particles - measurement, 2, 2);
-        weights = exp(-distsP.^2 / (2*15^2));
-        weights = weights / sum(weights);
-        % Resample
-        indices = drawRandomIdx(weights, numParticles);
-        particles = particles(indices, :);
-
-        %% ---- Check Capture Condition ----
-        if trueDist <= captureRadius
+        %% E. CAPTURE CHECK
+        if distSH <= captureRadius
             captured = true;
         end
 
-        %% ---- Update Graphics ----
-        seekerHist(end+1, :) = seekerPose(1:3); %#ok<AGROW>
-        hiderHist(end+1,  :) = hiderPose(1:3);  %#ok<AGROW>
+        %% F. LOCK-ON & STATUS DISPLAY
+        if isInsideBeam && ~isOccluded
+            isLockedOn = true;
+            sonarColor = [0.95 0.25 0.1];
+            sonarAlpha = 0.28;
+            statusStr  = sprintf('⚠ ALERT: HIDER SPOTTED! PURSUING\n  Range: %.1f m  Step: %d', rangeToHider, step);
+            statusCol  = [0.80 0.05 0.05];
+            set(hHider, 'MarkerFaceColor',[0.9 0.1 0.1],'MarkerSize',14);
+        elseif isInsideBeam && isOccluded
+            isLockedOn = false;
+            sonarColor = [0.15 0.65 0.95];
+            sonarAlpha = 0.16;
+            statusStr  = sprintf('★ SHADOW ZONE — Boulder occlusion active\n  Range: %.1f m  Step: %d', rangeToHider, step);
+            statusCol  = [0.55 0.40 0.05];
+            set(hHider, 'MarkerFaceColor',[0.15 0.70 0.30],'MarkerSize',11);
+        else
+            isLockedOn = false;
+            sonarColor = [0.1 0.65 0.95];
+            sonarAlpha = 0.16;
+            statusStr  = sprintf('◉ SEARCHING — Steer hider with mouse\n  Range: %.1f m  Step: %d', rangeToHider, step);
+            statusCol  = [0.1 0.25 0.35];
+            set(hHider, 'MarkerFaceColor',[0.15 0.70 0.30],'MarkerSize',11);
+        end
+        set(hSonarMesh, 'FaceColor', sonarColor, 'FaceAlpha', sonarAlpha);
+        set(hInSceneHUD, 'String', statusStr, 'Color', statusCol);
 
-        set(hSeeker,  'XData', seekerPose(1), 'YData', seekerPose(2), 'ZData', seekerPose(3));
-        set(hHider,   'XData', hiderPose(1),  'YData', hiderPose(2),  'ZData', hiderPose(3));
-        set(hSeekerT, 'XData', seekerHist(:,1), 'YData', seekerHist(:,2), 'ZData', seekerHist(:,3));
-        set(hHiderT,  'XData', hiderHist(:,1),  'YData', hiderHist(:,2),  'ZData', hiderHist(:,3));
-        set(hParts,   'XData', particles(:,1),  'YData', particles(:,2),  'ZData', particles(:,3));
+        % Rich HUD panel
+        hudLines = sprintf([ ...
+            '┌──────────────────────────────┐\n' ...
+            '│  STATUS TELEMETRY HUD        │\n' ...
+            '├──────────────────────────────┤\n' ...
+            '│ Step        : %6d         │\n' ...
+            '│ Range       : %6.1f m      │\n' ...
+            '│ Sonar       : %-12s   │\n' ...
+            '│ Seeker Mode : %-12s   │\n' ...
+            '│ Hider Mode  : %-12s   │\n' ...
+            '├──────────────────────────────┤\n' ...
+            '│ Seeker Pos  : (%.0f, %.0f, %.0f)  │\n' ...
+            '│ Hider Pos   : (%.0f, %.0f, %.0f)  │\n' ...
+            '└──────────────────────────────┘'], ...
+            step, rangeToHider, ...
+            ternaryStr(isInsideBeam && ~isOccluded, 'LOCKED ON', 'SCANNING'), ...
+            stateNames{seekerState}, hiderNames{hiderState}, ...
+            seekerPos(1), seekerPos(2), seekerPos(3), ...
+            hiderPos(1),  hiderPos(2),  hiderPos(3));
+        set(hHUDText, 'String', hudLines);
 
-        timeHist(end+1) = t; %#ok<AGROW>
-        distHist(end+1) = trueDist; %#ok<AGROW>
-        set(hDistLine, 'XData', timeHist, 'YData', distHist);
+        %% G. GRAPHICS UPDATE
+        set(hHider,         'XData',hiderPos(1),  'YData',hiderPos(2),  'ZData',hiderPos(3));
+        set(hSeeker,        'XData',seekerPos(1), 'YData',seekerPos(2), 'ZData',seekerPos(3));
+        set(hPointerTarget, 'XData',mouseTargetPos(1),'YData',mouseTargetPos(2),'ZData',mouseTargetPos(3));
 
-        % Update HUD text
-        hudStr = sprintf([ ...
-            'STATUS TELEMETRY HUD\n' ...
-            '-----------------------------------\n' ...
-            'Time Elapsed   : %6.1f s / %d s\n' ...
-            'Distance       : %6.1f m\n' ...
-            'Sonar Signal   : %s\n' ...
-            'Seeker AI Mode : %s\n' ...
-            'Hider AI Mode  : %s\n' ...
-            '-----------------------------------\n'], ...
-            t, maxTime, trueDist, iff(detected, 'ACQUIRED [LOCKED]', 'SEARCHING...'), ...
-            stateNames{seekerState}, hiderNames{hiderState});
-
-        if captured
-            hudStr = [hudStr sprintf('\n*** RESULT: SEEKER CAPTURED HIDER! ***\n')];
+        if mod(step,2) == 0
+            hiderTrailX(end+1)  = hiderPos(1);  hiderTrailY(end+1)  = hiderPos(2);  hiderTrailZ(end+1)  = hiderPos(3);
+            seekerTrailX(end+1) = seekerPos(1); seekerTrailY(end+1) = seekerPos(2); seekerTrailZ(end+1) = seekerPos(3);
+            if length(hiderTrailX) > 80
+                hiderTrailX(1)=[]; hiderTrailY(1)=[]; hiderTrailZ(1)=[];
+                seekerTrailX(1)=[]; seekerTrailY(1)=[]; seekerTrailZ(1)=[];
+            end
+            set(hHiderTrail,  'XData',hiderTrailX,  'YData',hiderTrailY,  'ZData',hiderTrailZ);
+            set(hSeekerTrail, 'XData',seekerTrailX, 'YData',seekerTrailY, 'ZData',seekerTrailZ);
         end
 
-        set(hHudText, 'String', hudStr);
-        drawnow;
+        % Distance plot
+        distHist(end+1) = distSH; %#ok<AGROW>
+        stepHist(end+1) = step;   %#ok<AGROW>
+        set(hDistLine, 'XData', stepHist, 'YData', distHist);
+
+        drawnow limitrate;
+        pause(0.025);
 
         if captured
-            fprintf('\n>>> CAPTURE! Seeker intercepted Hider at t = %.1f s <<<\n\n', t);
+            set(hInSceneHUD, 'String', sprintf('>>> CAPTURE! Range: %.1f m <<<', distSH), 'Color', [0.8 0.05 0.05]);
+            set(hHUDText, 'String', sprintf('GAME OVER — SEEKER WINS!\nCapture at step %d\nFinal range: %.1f m', step, distSH));
+            drawnow;
+            pause(3);
             break;
         end
     end
+end
 
-    if ~captured && t >= maxTime
-        fprintf('\n>>> HIDER WINS! Survived full %d seconds <<<\n\n', maxTime);
+%% =========================================================================
+%   MOUSE CALLBACK
+% =========================================================================
+function onMouseMove(hAx)
+    global mouseTargetPos arenaBounds;
+    cp     = get(hAx, 'CurrentPoint');
+    pFront = cp(1,:); pBack = cp(2,:);
+    targetZ = 42.0;
+    if abs(pBack(3) - pFront(3)) > 1e-9
+        t = (targetZ - pFront(3)) / (pBack(3) - pFront(3));
+        tX = pFront(1) + t*(pBack(1)-pFront(1));
+        tY = pFront(2) + t*(pBack(2)-pFront(2));
+        mouseTargetPos = [max(5, min(arenaBounds(1)-5, tX)), ...
+                          max(5, min(arenaBounds(2)-5, tY)), targetZ];
     end
 end
 
-%% Helper Functions
+function onCloseFigure(figHandle)
+    global isSimRunning;
+    isSimRunning = false;
+    delete(figHandle);
+end
+
+%% =========================================================================
+%   HELPERS
+% =========================================================================
 function indices = drawRandomIdx(weights, N)
-    edges = [0; cumsum(weights)];
-    edges(end) = 1.0;
-    u = rand(N, 1);
-    indices = zeros(N, 1);
+    edges = [0; cumsum(weights)]; edges(end) = 1.0;
+    u = rand(N,1); indices = zeros(N,1);
     for i = 1:N
         idx = find(u(i) >= edges(1:end-1) & u(i) < edges(2:end), 1);
         if isempty(idx), idx = N; end
@@ -252,6 +407,10 @@ function indices = drawRandomIdx(weights, N)
     end
 end
 
-function res = iff(cond, valTrue, valFalse)
-    if cond, res = valTrue; else, res = valFalse; end
+function v = ternary(cond, a, b)
+    if cond, v = a; else, v = b; end
+end
+
+function s = ternaryStr(cond, a, b)
+    if cond, s = a; else, s = b; end
 end
