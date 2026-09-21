@@ -23,7 +23,10 @@ function omap = initOccupancyMap(resolution)
     thisDir   = fileparts(mfilename('fullpath'));
     refDir    = fullfile(thisDir, '..', '..', '..', ...
                          'reference_auv', 'Source', 'Planning');
-    refDir    = what(refDir).path;   % resolve to absolute canonical path
+    if ~exist(refDir, 'dir')
+        % Fallback relative to current working directory
+        refDir = fullfile(pwd, 'reference_auv', 'Source', 'Planning');
+    end
 
     highResFile = fullfile(refDir, 'UUVSceneHighResMap.mat');
     lowResFile  = fullfile(refDir, 'UUVSceneLowResMap3.mat');
