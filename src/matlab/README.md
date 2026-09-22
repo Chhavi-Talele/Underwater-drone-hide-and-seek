@@ -1,5 +1,10 @@
 # Underwater Drone Hide & Seek — MATLAB Simulation
 
+**Author:** Chhavi Talele ([@Chhavi-Talele](https://github.com/Chhavi-Talele))  
+**Project:** MathWorks Excellence in Innovation — Autonomous Underwater Vehicle (AUV) Hide & Seek  
+**Official Reference:** [MathWorks AUV Modeling & Simulation Challenge](https://www.mathworks.com/videos/design-modeling-and-simulation-of-autonomous-underwater-vehicles-1619636864529.html)  
+**Platform:** MATLAB (R2020b or newer / MATLAB Online)  
+
 A multi-agent autonomous underwater vehicle (AUV) simulation where two drones play hide-and-seek in a 3D underwater terrain, built on the [MathWorks AUV Demo](../reference_auv/).
 
 ---
