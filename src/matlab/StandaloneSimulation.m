@@ -54,7 +54,7 @@ function runSingleSimulation()
     X_MAX = 250; Y_MAX = 250; Z_MAX = 60;
 
     % Main 3D Simulation Axes
-    hAx = axes('Parent', hFig, 'Position', [0.03 0.17 0.64 0.75], 'Tag', 'MainAxes');
+    hAx = axes('Parent', hFig, 'Position', [0.05 0.20 0.61 0.71], 'Tag', 'MainAxes');
     hold(hAx, 'on'); grid(hAx, 'on');
 
     xlim(hAx, [0 X_MAX]); ylim(hAx, [0 Y_MAX]); zlim(hAx, [0 Z_MAX]);
@@ -244,7 +244,7 @@ function runSingleSimulation()
     %   7. SIDE PANELS (Distance Plot & Telemetry HUD)
     % ======================================================================
     % Inter-AUV Distance Plot Panel
-    axDist = axes('Parent', hFig, 'Position', [0.70 0.56 0.27 0.36]);
+    axDist = axes('Parent', hFig, 'Position', [0.70 0.60 0.27 0.31]);
     set(axDist, 'Color',[0.92 0.96 1.0], 'XColor',[0.1 0.2 0.3], 'YColor',[0.1 0.2 0.3]);
     hold(axDist,'on'); grid(axDist,'on');
     title(axDist,'Inter-AUV Range History','FontWeight','bold','Color',[0.05 0.15 0.25]);
@@ -254,17 +254,17 @@ function runSingleSimulation()
     yline(axDist, 65.0, 'b:', 'Sonar Max (65m)','LineWidth',1.2,'Color',[0.1 0.4 0.8]);
 
     % HUD Stats Telemetry Panel
-    axHUD = axes('Parent', hFig, 'Position', [0.70 0.17 0.27 0.35]);
+    axHUD = axes('Parent', hFig, 'Position', [0.70 0.16 0.27 0.32]);
     axis(axHUD,'off');
     set(axHUD,'Color',[0.88 0.94 0.98]);
     hHUDText = text(axHUD, 0.02, 0.98, 'INITIALIZING TACTICAL SIMULATION...', ...
         'Units','normalized','VerticalAlignment','top', ...
-        'FontSize',9.5,'FontName','Courier','Color',[0.05 0.15 0.25], ...
-        'BackgroundColor',[0.93 0.97 1.0],'Margin',8, ...
+        'FontSize',9.0,'FontName','Courier','Color',[0.05 0.15 0.25], ...
+        'BackgroundColor',[0.93 0.97 1.0],'Margin',6, ...
         'Interpreter','none');
 
     % Legend Panel at bottom
-    axLeg = axes('Parent', hFig, 'Position', [0.03 0.03 0.94 0.11]);
+    axLeg = axes('Parent', hFig, 'Position', [0.03 0.02 0.94 0.09]);
     axis(axLeg,'off'); set(axLeg,'Color',[0.88 0.94 0.98]);
     text(axLeg,0.01,0.65,'● HIDER AUV (Stealth AI + Passive Sonar Array)', 'Units','normalized','Color',[0.05 0.55 0.20],'FontSize',9.5,'FontWeight','bold');
     text(axLeg,0.01,0.25,'■ SEEKER AUV (Active Sonar + 3D Particle Filter)', 'Units','normalized','Color',[0.80 0.15 0.15], 'FontSize',9.5,'FontWeight','bold');
