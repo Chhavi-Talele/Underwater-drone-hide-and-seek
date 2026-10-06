@@ -15,6 +15,8 @@
 %    - Seeker AUV with 38° Conical Active Sonar Beam & 3D Particle Filter Tracking
 %    - Ocean Visuals: Light ocean theme, ocean surface plane, textured seabed,
 %      14 shaded boulders, swaying kelp fronds, live acoustic exposure seabed heatmap.
+%    - HUD Time Tracking: Wall-clock elapsed time (MM:SS) shown live in the
+%      Telemetry & AI Status HUD panel, alongside the timestep counter.
 %  ========================================================================
 
 function StandaloneSimulation()
@@ -291,7 +293,7 @@ function runSingleSimulation()
     hSeeker = plot3(hAx, seekerPos(1), seekerPos(2), seekerPos(3), 's', ...
                     'MarkerSize',14, 'MarkerFaceColor',[0.95 0.20 0.15], ...
                     'MarkerEdgeColor',[0.45 0.05 0.05], 'LineWidth',2.2);
-    
+
     % Heading direction vectors
     hHiderDirLine  = plot3(hAx, [hiderPos(1) hiderPos(1)], [hiderPos(2) hiderPos(2)], [hiderPos(3) hiderPos(3)], ...
                           '-', 'Color',[0.05 0.55 0.18], 'LineWidth',2.8);
@@ -328,7 +330,7 @@ function runSingleSimulation()
     cLX = Rgrid;
     cLY = Rgrid.*tan(azimuthAperture).*cos(PhiGrid);
     cLZ = Rgrid.*tan(elevationAperture).*sin(PhiGrid);
-    
+
     hSonarMesh = surf(hAx, cLX, cLY, cLZ, ...
                       'FaceColor', [0.10 0.65 0.95], 'EdgeColor','none', 'FaceAlpha', 0.18);
 
@@ -375,13 +377,16 @@ function runSingleSimulation()
     captured    = false;
     timeSinceRehide = 99;
 
+    % --- HUD TIME TRACKING: wall-clock stopwatch, starts fresh each run ---
+    simStartTime = tic;
+
     weights = ones(numParticles,1) / numParticles;
 
     %% =====================================================================
     %   10. MAIN SIMULATION LOOP
     % ======================================================================
     while ishandle(hFig)
-        
+
         % Handle Pause State Reliably
         if getappdata(hFig, 'isPaused')
             set(hPauseBanner, 'Visible', 'on');
@@ -394,6 +399,10 @@ function runSingleSimulation()
 
         step = step + 1;
         timeSinceRehide = timeSinceRehide + 1;
+
+        % --- HUD TIME TRACKING: elapsed wall-clock time, formatted MM:SS ---
+        elapsedSec = toc(simStartTime);
+        elapsedStr = sprintf('%02d:%02d', floor(elapsedSec/60), floor(mod(elapsedSec,60)));
 
         % Ocean current drift vector
         oceanCurrent = [0.15*sin(step*0.02), 0.10*cos(step*0.025), 0];
@@ -469,10 +478,10 @@ function runSingleSimulation()
             dyGrid = Ygrid - seekerPos(2);
             distGrid = sqrt(dxGrid.^2 + dyGrid.^2);
             angleGrid = atan2(dyGrid, dxGrid);
-            
+
             angleDiff = abs(angleGrid - sonarAzimuth);
             angleDiff = min(angleDiff, 2*pi - angleDiff);
-            
+
             scannedMask = (distGrid <= sonarMaxRange) & (angleDiff <= azimuthAperture);
             exposureGrid(scannedMask) = exposureGrid(scannedMask) + 0.40;
             set(hHeatmap, 'CData', exposureGrid);
@@ -490,7 +499,7 @@ function runSingleSimulation()
         futureBeamDir  = RzFut*[1;0;0];
         futureCosA     = dot(relVec/max(0.1, rangeToHider), futureBeamDir);
         futureTargetAngle = acos(max(-1.0, min(1.0, futureCosA)));
-        
+
         predictiveBeamWarning = isInsideBeam || (hiderHearsSeekerPing && futureTargetAngle < azimuthAperture * 1.5);
 
         % 3. Tactical State Selection
@@ -508,23 +517,23 @@ function runSingleSimulation()
         if hiderState == 3 || hiderState == 4 || timeSinceRehide > 30
             bestScore = -Inf;
             bestTarget = hiderPos;
-            
+
             % Evaluate candidate spots behind all 14 boulders & kelp thickets
             for r = 1:numRocks
                 rC   = rockModels{r}.center;
                 rRad = rockModels{r}.radius;
-                
+
                 % Vector from Seeker to Rock center
                 dirSR = rC - seekerPos;
                 dirSR_norm = dirSR / max(0.1, norm(dirSR));
-                
+
                 % Shadow zone candidate behind boulder
                 candidate = rC + dirSR_norm * (rRad + 12.0);
                 candidate(3) = min(50, max(15, rC(3) - 2.0));
-                
+
                 distS = norm(candidate - seekerPos);
                 distH = norm(candidate - hiderPos);
-                
+
                 % Check kelp proximity for candidate
                 nearKelpBonus = 0;
                 for p = 1:numPlants
@@ -536,7 +545,7 @@ function runSingleSimulation()
                 % Multi-factor Safety Score
                 shadowAlignment = dot(dirSR_norm, beamDir);
                 score = distS * 1.8 - distH * 0.35 - shadowAlignment * 18.0 + nearKelpBonus;
-                
+
                 if score > bestScore
                     bestScore = score;
                     bestTarget = candidate;
@@ -549,7 +558,7 @@ function runSingleSimulation()
         % 5. Hider Steering & Repulsion Physics
         hiderDir = hiderTargetPos - hiderPos;
         distToTarget = norm(hiderDir);
-        
+
         % Speed tuning per tactical state
         switch hiderState
             case 3, hiderSpeed = 2.70; % SPRINT EVADE
@@ -560,7 +569,7 @@ function runSingleSimulation()
 
         if distToTarget > 1.2
             hiderMoveDir = hiderDir / distToTarget;
-            
+
             % Obstacle repulsion from boulders
             for r = 1:numRocks
                 rC = rockModels{r}.center;
@@ -601,7 +610,7 @@ function runSingleSimulation()
             patrolTarget = [125 + 90*cos(step*0.022), 125 + 90*sin(step*0.028), 28 + 8*sin(step*0.035)];
             dirP = patrolTarget - seekerPos;
             seekerMoveDir = 0.95 * (dirP / max(0.1, norm(dirP)));
-            
+
             sonarAzimuth = mod(sonarAzimuth + deg2rad(8), 2*pi);
             sonarPitch   = deg2rad(6)*sin(step*0.08) + deg2rad(4);
         else
@@ -610,7 +619,7 @@ function runSingleSimulation()
             distE  = norm(dirE);
             speedS = min(1.65, distE * 0.06 + 0.6);
             seekerMoveDir = speedS * (dirE / max(0.1, distE));
-            
+
             sonarAzimuth = atan2(dirE(2), dirE(1));
             sonarPitch   = atan2(dirE(3), max(0.1, norm(dirE(1:2))));
         end
@@ -663,7 +672,7 @@ function runSingleSimulation()
         distsP    = vecnorm(particles - meas, 2, 2);
         weights   = exp(-distsP.^2/(2*16^2));
         weights   = weights / (sum(weights) + 1e-9);
-        
+
         idxR      = drawRandomIdx(weights, numParticles);
         particles = particles(idxR,:);
         set(hParticles, 'XData', particles(:,1), 'YData', particles(:,2), 'ZData', particles(:,3));
@@ -676,23 +685,23 @@ function runSingleSimulation()
         end
 
         if detectedBySonar
-            statusStr = sprintf('!! ALERT: HIDER SPOTTED! SEEKER PURSUING\n  Range: %.1f m  | Step: %d', rangeToHider, step);
+            statusStr = sprintf('!! ALERT: HIDER SPOTTED! SEEKER PURSUING\n  Range: %.1f m  | Step: %d  | Time: %s', rangeToHider, step, elapsedStr);
             statusCol = [0.80 0.05 0.05];
             set(hHider, 'MarkerFaceColor',[0.95 0.1 0.1],'MarkerSize',14);
         elseif predictiveBeamWarning
-            statusStr = sprintf('⚡ SWEEP WARNING: Hider predicting sonar sweep!\n  Range: %.1f m  | Step: %d', rangeToHider, step);
+            statusStr = sprintf('⚡ SWEEP WARNING: Hider predicting sonar sweep!\n  Range: %.1f m  | Step: %d  | Time: %s', rangeToHider, step, elapsedStr);
             statusCol = [0.85 0.45 0.05];
             set(hHider, 'MarkerFaceColor',[0.90 0.60 0.10],'MarkerSize',12);
         elseif isOccludedByRock && isInsideBeam
-            statusStr = sprintf('* SHADOW ZONE: Hider hidden behind Rock!\n  Range: %.1f m  | Step: %d', rangeToHider, step);
+            statusStr = sprintf('* SHADOW ZONE: Hider hidden behind Rock!\n  Range: %.1f m  | Step: %d  | Time: %s', rangeToHider, step, elapsedStr);
             statusCol = [0.55 0.40 0.05];
             set(hHider, 'MarkerFaceColor',[0.15 0.70 0.30],'MarkerSize',11);
         elseif inKelpThicket
-            statusStr = sprintf('⌇ KELP COVER: Acoustic signal attenuated\n  Range: %.1f m  | Step: %d', rangeToHider, step);
+            statusStr = sprintf('⌇ KELP COVER: Acoustic signal attenuated\n  Range: %.1f m  | Step: %d  | Time: %s', rangeToHider, step, elapsedStr);
             statusCol = [0.10 0.45 0.20];
             set(hHider, 'MarkerFaceColor',[0.15 0.70 0.30],'MarkerSize',11);
         else
-            statusStr = sprintf('SEARCHING: Seeker scanning ocean volume\n  Range: %.1f m  | Step: %d', rangeToHider, step);
+            statusStr = sprintf('SEARCHING: Seeker scanning ocean volume\n  Range: %.1f m  | Step: %d  | Time: %s', rangeToHider, step, elapsedStr);
             statusCol = [0.10 0.25 0.35];
             set(hHider, 'MarkerFaceColor',[0.15 0.70 0.30],'MarkerSize',11);
         end
@@ -704,6 +713,7 @@ function runSingleSimulation()
             '+----------------------------------+\n' ...
             '|   TELEMETRY & AI STATUS HUD      |\n' ...
             '+----------------------------------+\n' ...
+            '| Elapsed Time : %-16s  |\n' ...
             '| Timestep     : %6d            |\n' ...
             '| Range        : %6.1f m         |\n' ...
             '| Sonar Beam   : %-16s  |\n' ...
@@ -716,6 +726,7 @@ function runSingleSimulation()
             '| Seeker Pos   : (%.0f, %.0f, %.0f)      |\n' ...
             '| Hider Pos    : (%.0f, %.0f, %.0f)      |\n' ...
             '+----------------------------------+'], ...
+            elapsedStr, ...
             step, rangeToHider, ...
             ternaryStr(detectedBySonar, 'LOCKED ON', 'SCANNING'), ...
             seekerStateNames{seekerState}, hiderStateNames{hiderState}, ...
@@ -765,8 +776,8 @@ function runSingleSimulation()
         pause(0.015);
 
         if captured
-            set(hInSceneHUD, 'String', sprintf('>>> CAPTURE AT STEP %d! Range: %.1f m <<<', step, rangeToHider), 'Color', [0.80 0.05 0.05]);
-            set(hHUDText, 'String', sprintf('GAME OVER -- SEEKER CAPTURED HIDER!\nCapture Step: %d\nFinal Distance: %.2f m', step, rangeToHider));
+            set(hInSceneHUD, 'String', sprintf('>>> CAPTURE AT STEP %d! Range: %.1f m | Time: %s <<<', step, rangeToHider, elapsedStr), 'Color', [0.80 0.05 0.05]);
+            set(hHUDText, 'String', sprintf('GAME OVER -- SEEKER CAPTURED HIDER!\nCapture Step: %d\nElapsed Time: %s\nFinal Distance: %.2f m', step, elapsedStr, rangeToHider));
             drawnow;
             pause(3);
             break;
@@ -850,12 +861,12 @@ function cbToggleOrbit(src, ~)
     hFig = ancestor(src, 'figure');
     hAx = findobj(hFig, 'Type', 'axes', 'Tag', 'MainAxes');
     if isempty(hAx), return; end
-    
+
     orbitState = getappdata(hFig, 'orbitState');
     if isempty(orbitState), orbitState = false; end
     orbitState = ~orbitState;
     setappdata(hFig, 'orbitState', orbitState);
-    
+
     if orbitState
         rotate3d(hAx, 'on');
         set(src, 'String', '🔄 Orbit ON', 'BackgroundColor', [0.80 0.35 0.20]);
